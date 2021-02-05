@@ -12,7 +12,7 @@ import {
   randomString,
 } from './utils'
 
-export type { DIDDocument } from 'did-resolver'
+export type { DIDDocument, PublicKey } from 'did-resolver'
 export type { DagJWS, JWSSignature } from './utils'
 export type DIDProvider = RPCConnection
 export type ResolverRegistry = Record<string, DIDResolver>
@@ -46,6 +46,15 @@ export interface CreateJWSParams extends CreateJWSOptions {
 
 export interface CreateJWSResult {
   jws: DagJWS
+}
+
+export interface CreateJWEParams extends CreateJWEOptions {
+  cleartext: Uint8Array
+  recipients: Array<string>
+}
+
+export interface CreateJWEResult {
+  jwe: JWE
 }
 
 export interface VerifyJWSResult {
@@ -134,6 +143,15 @@ export class DID {
   }
 
   /**
+   * Clear DID provider from this instance.
+   */
+  clearProvider(): void {
+    if (this._client !== undefined) {
+      this._client = undefined
+    }
+  }
+
+  /**
    * Set the DID-resolver user by this instance
    *
    * @param resolver    Either a Resolver instance or an object with specific resolvers
@@ -167,6 +185,14 @@ export class DID {
     if (payload.exp < Date.now() / 1000) throw new Error('Invalid authencation response, expired')
     this._id = payload.did
     return this._id
+  }
+
+  /**
+   * Deauthenticate the user.
+   */
+  deauthenticate(): void {
+    this.clearProvider()
+    this._id = undefined
   }
 
   /**
@@ -243,8 +269,27 @@ export class DID {
     recipients: Array<string>,
     options: CreateJWEOptions = {}
   ): Promise<JWE> {
-    const encrypters = await resolveX25519Encrypters(recipients, this._resolver)
-    return createJWE(cleartext, encrypters, options.protectedHeader, options.aad)
+    if (this._client == null) throw new Error('No provider available')
+
+    const didDoc = await this._resolver.resolve(recipients[0])
+    const recepients = []
+    if (didDoc.publicKey[0].publicKeyHex) {
+      recepients.push(didDoc.publicKey[0].publicKeyHex)
+    }
+    try {
+      const { jwe } = await this._client.request<CreateJWEParams, CreateJWEResult>(
+        'did_createJWE',
+        {
+          ...options,
+          cleartext,
+          recipients: recepients,
+        }
+      )
+      return jwe
+    } catch (err) {
+      const encrypters = await resolveX25519Encrypters(recipients, this._resolver)
+      return createJWE(cleartext, encrypters, options.protectedHeader, options.aad)
+    }
   }
 
   /**
